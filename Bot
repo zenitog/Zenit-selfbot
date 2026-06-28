@@ -1,0 +1,758 @@
+import requests
+import json
+import os
+import time
+import random
+import threading
+import websocket
+import re
+from collections import defaultdict
+
+# ==================== OWNER CONFIGURATION ====================
+OWNER_ID = ""  # Replace with your ID
+
+# ==================== MULTI-TOKEN CONFIGURATION ====================
+TOKENS = [
+    "",
+"",
+  "",
+"",
+    "",
+    "",
+    "",
+    "",
+    ""
+]
+
+TOKENS = [t for t in TOKENS if t and t.strip() and not t.startswith('.')]
+# ================================================================
+
+# --- FILES & PATHS ---
+SUDO_FILE = "sudo_users.json"
+
+# --- FIXED PREFIX ---
+PREFIX = "$"
+
+# --- SYSTEM FLAGS ---
+ACTIVE_NC_CHANNELS = {}
+SPAM_STOP_EVENTS = {}           # channel_id -> threading.Event to stop all spam threads for that channel
+
+# --- AUTOREPLY TARGETS (channel_id -> list of user IDs) ---
+AUTOREPLY_TARGETS = {}
+
+# --- AUTOREACT EMOJIS (channel_id -> emoji) ---
+AUTOREACT_EMOJIS = {}
+
+# --- START TIME FOR STATUS ---
+START_TIME = time.time()
+
+# --- NC LIST ---
+NC_LIST = [
+    "𝐑ɴᴅʏᴄ𝐄 𝐙ᴇɴɪ𝐓 𝐇ᴀᴛ𝐄 𝐃ᴇɢ𝐀 ",
+    "𝐆ʀɪ𝐁 𝐙ᴇɴɪ𝐓 𝐏ᴀᴩ𝐀 𝐒ᴇ 𝐏ɪʟ𝐀 𝐊ᴀɪꜱ𝐄 🤣🤣",
+    "𝐂ʜᴀ𝐋 𝐓ᴇʀ𝐈 𝐌ᴀ𝐀 𝐂ᴏᴅ𝐔 🤡🤣",
+    "𝐙ᴇɴɪ𝐓 𝐏ᴀᴩ𝐀 𝐁ᴏ𝐋 🤣🤣",
+    " 𝐓ᴍᴋ𝐗 𝐌ᴇ 121 🤣",
+    "𝐓ᴍᴋ𝐗 𝐌ᴇ 𝐙ᴇɴɪ𝐓 𝐊ᴀ 𝐋ᴀɴ𝐃 🤣🤣",
+    "𝐓ᴇʀ𝐈 𝐌ᴀ𝐀 𝐊ᴀ 𝐑ᴀᴩ𝐄 𝐇ᴏɢ𝐀 𝐀ᴀ𝐉 🥵😂",
+    "𝐓ᴇʀ𝐈 𝐌ᴀ𝐀 𝐆ʙ 𝐑ᴏᴀ𝐃 𝐏ᴇ 𝐍ᴀɴɢ𝐈 🤣🤣",
+    "𝐉ʜᴜʟ𝐀 𝐉ʜᴜ𝐋 𝐏ᴀ𝐑 𝐁ᴀᴀ𝐏 𝐊ᴏ 𝐌ᴀ𝐓 𝐁ʜᴜ𝐋"
+]
+
+# --- BASE SPAM MESSAGES ---
+BASE_SPAM_MESSAGES = [
+    "# 𓆩 🔸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩 🔸𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩 🔸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩 🔸𓆪",
+    "# 𓆩🈸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈸𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈸𓆪",
+    "# 𓆩🈷️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈷️𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈷️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈷️𓆪",
+    "# 𓆩🈺𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈺𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈺𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈺𓆪",
+    "# 𓆩🈸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈸𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈸𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈸𓆪,",
+    "# 𓆩🈚𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈚𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈚𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈚𓆪",
+    "# 𓆩🈶𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈶𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈶𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈶𓆪",
+    "# 𓆩🉑𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🉑𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🉑𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🉑𓆪",
+    "# 𓆩🈲𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈲𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈲𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈲𓆪",
+    "# 𓆩🈹𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈹𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 𓆩🈹𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈹𓆪",
+    "# 𓆩🈵𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈵𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈵𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈵𓆪",
+    "# 𓆩🈴𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈴𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🈴𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🈴𓆪",
+    "# 𓆩㊗️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ?? #s?? #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩㊗️𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩㊗️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩㊗️𓆪",
+    "# 𓆩㊙️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩㊙️𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩㊙️𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩㊙️𓆪",
+    "# 𓆩🉐𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🉐𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🉐𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🉐𓆪",
+    "# 𓆩⛔𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⛔𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩⛔𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⛔𓆪",
+    "# 𓆩🚫𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🚫𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🚫𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🚫𓆪",
+    "# 𓆩⭕𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⭕𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩⭕𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⭕𓆪",
+    "# 𓆩⛎𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⛎𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩⛎𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩⛎𓆪",
+    "# 𓆩♓𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♓𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♓𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♓𓆪",
+    "# 𓆩♒𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♒𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♒𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♒𓆪",
+    "# 𓆩♑𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #ᴋ𝗢 #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♑𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♑𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♑𓆪",
+    "# 𓆩♐𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♐𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♐𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♐𓆪",
+    "# 𓆩♏𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♏𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♏𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♏𓆪",
+    "# 𓆩♎𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♎𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♎𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♎𓆪",
+    "# 𓆩♍𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♍𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♍𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♍𓆪",
+    "# 𓆩♌𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♌𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♌𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♌𓆪",
+    "# 𓆩♋𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♋𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♋𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♋𓆪",
+    "# 𓆩♊𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♊𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♊𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♊𓆪",
+    "# 𓆩♉𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♉𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♉𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♉𓆪",
+    "# 𓆩♈𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♈𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩♈𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩♈𓆪",
+    "# 𓆩🧭𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🧭𓆪~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~𓆩🧭𓆪##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞 #𝗥ɴ𝗗l⃠𝗖ᴇ #𝗟ᴀ𝗗ᴄ𝗘 #ɪ𝗦 #s𝗘 #𝗧ᴇ𝗭 #𝗧ᴏ #𝗧ᴇ𝗥ɪ #𝗔ᴍ𝗠ᴀ #𝗖ʜ𝗨ᴅ𝗧ɪ #𝗛ᴀ𝗜I⃠ 𓆩🧭𓆪","𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😈", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔥", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⚡", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 👑", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💀", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🖤", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💫", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌟", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🚀", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎯", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐉", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦅", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌪️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ☠️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🥶", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤖", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🧊", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💎", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🏆", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎮", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦾", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌙", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ☄️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔱", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎭", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐺", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐯", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦈", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦂", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌌", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💥", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎆", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎇", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ✨", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌠", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🪐", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌋", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔮", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🗡️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⚔️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🛡️", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🏹", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎲", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎰", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎨", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎤", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎧", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 📱", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💻", "𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⌚",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😎",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😏",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤩",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🥳",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😜",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😝",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤟",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 👊",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ✌️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤙",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💯",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔥",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⚡",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌪️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ☄️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌈",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌊",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ❄️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌋",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌍",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌎",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌏",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌞",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌝",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌚",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⭐",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌠",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ✨",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💫",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🌟",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎉",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎊",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎈",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎁",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🏆",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🥇",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🥈",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🥉",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎖️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 👑",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💎",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔮",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🧿",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🪙",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🏅",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎯",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎮",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🕹️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎲",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ♠️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ♥️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ♣️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ♦️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🃏",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐲",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐉",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦅",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦁",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐺",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐯",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦈",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦂",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦊",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🐻",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦍",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦏",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🦄",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🪽",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🗡️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⚔️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🛡️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🏹",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔱",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ☠️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💀",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 👹",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 😈",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤖",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🚀",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🛸",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🛰️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💻",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 📱",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ⌚",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎧",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎤",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 📢",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🔊",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎵",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🎶",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🖤",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 ❤️",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💜",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💙",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💚",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 💛",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🧡",
+"𝐓ᴍᴋ𝐗 𝐌ᴀ𝐈 🤍"
+]
+
+# --- Generate LONG spam messages by repeating each base message 4 times ---
+SPAM_MESSAGES = [msg * 4 for msg in BASE_SPAM_MESSAGES]
+
+# --- AUTOREPLY REPLY TEXTS ---
+REPLY_TEXTS = [
+    "𝐖ᴏ ʙʜɪ ᴋʏᴀ ᴅɪɴ ᴛʜᴇ ᴊᴀʙ ᴛʀʏ ᴍᴀᴀ ᴍᴜᴊʜᴇ 𝐀ᴘɴᴀ 𝐂ʜᴜᴛ 𝐃ᴇᴛɪ ᴛʜɪ ʏᴀᴀʀ 💔🥀👌🏻",
+    "𝐀ᴡᴀᴢ 𝐍ɪᴄʜᴇ 𝐆ᴜʟᴀᴀᴍ 🤢👇🏻",
+    "𝐓ʀʏ 𝐌ᴀᴀ ɴᴇ 𝐂ʜᴜᴅɴᴇ 𝐌ᴀɪ ɢᴏʟᴅ 𝐌ᴇᴅᴀʟ 𝐉ᴇᴇᴛᴀ ᴇʏ 𝐃ᴏꜱᴛ 🤩👑",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 𝐌ᴇ 𝐌ᴇʀᴀ 𝐋ᴜɴᴅ 🖕🏻😈",
+    "𝐁ʜᴏꜱᴀᴅɪᴋᴇ 𝐀ᴘɴɪ 𝐁ᴇʜᴇɴ 𝐂ʜᴜᴅᴀ 🖕🏻😈",
+    "𝐑ᴀɴᴅɪ ᴋᴇ 𝐁ᴀᴄᴄʜᴇ 𝐀ᴜᴋᴀᴛ 𝐌ᴇ 𝐑ᴇʜ 🖕🏻😈",
+    "𝐌ᴀᴅᴀʀᴄʜᴏᴅ 𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 🖕🏻😈",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋᴀ 𝐁ʜᴏꜱᴅᴀ ᴋʜᴏʟ ᴅᴜɴɢᴀ 🔓😈",
+    "𝐁ʜᴇɴᴄʜᴏᴅ 𝐀ᴘɴɪ 𝐀ᴜᴋᴀᴛ 𝐌ᴇ 𝐑ᴇʜ 🤡💩",
+    "𝐓𝐌𝐊𝐂 ᴘᴇ 𝐂ʜᴀᴘᴘᴀʟ 𝐌ᴀᴀʀᴜɴɢᴀ 👟💥",
+    "𝐁ʜᴏꜱᴅɪᴋᴇ 𝐓ᴇʀɪ 𝐊ʜᴀɴᴅᴀɴ ᴋɪ 𝐁𝐊𝐂 💀🖕🏻",
+    "𝐑ᴀɴᴅɪ ᴋɪ 𝐀ᴜʟᴀᴅ ᴄʜᴜᴘ ʜᴏ ᴊᴀ 🔇😒",
+    "𝐆ᴜʟᴀᴀᴍ ʜᴇɪ ᴛᴜ ᴍᴇʀᴀ ᴀʙ ᴀᴜʀ ʀᴀʜᴇɢᴀ ʙʜɪ 👑😎",
+    "𝐓ᴇʀɪ 𝐁ᴇʜᴇɴ ᴋɪ 𝐂ʜᴜᴛ 𝐌ᴇ 𝐌ɪʀᴄʜɪ 🌶️🖕🏻",
+    "𝐌ᴀᴅᴀʀᴄʜᴏᴅ 𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 𝐌ᴇ 𝐏ᴀɪʀ 🦶🏻😈",
+    "𝐁ʜᴏꜱᴀᴅɪᴋᴇ 𝐓ᴇʀɪ 𝐁ᴇʜᴇɴ ᴋᴀ 𝐁ʜᴏꜱᴅᴀ 🗑️😏",
+    "𝐑ᴀɴᴅɪ ᴋᴀ 𝐏ɪʟʟᴀ ʜᴀɪ ᴛᴜ 🐕💩",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋᴏ 𝐁ᴀᴢᴀᴀʀ 𝐌ᴇ 𝐂ʜᴏᴅᴜɴɢᴀ 🌃😈",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 𝐌ᴇ 𝐆ᴀʀᴀᴍ 𝐓ᴇʟ 🌡️🖕🏻",
+    "𝐌ᴀᴅᴀʀᴄʜᴏᴅ 𝐓ᴇʀɪ 𝐁ᴇʜᴇɴ ᴍᴇʀɪ 𝐑ᴀɴᴅɪ 💋👿",
+    "𝐑ᴀɴᴅɪ ᴋᴇ 𝐁ᴀᴄᴄʜᴇ 𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 🖕🏻😈",
+    "𝐓ᴇʀɪ 𝐁ᴇʜᴇɴ ᴋᴏ 𝐑ᴀᴀᴛ ʙʜᴀʀ 𝐂ʜᴏᴅᴜɴɢᴀ 🌙😈",
+    "𝐑ᴀɴᴅɪ ᴋᴀ 𝐁ᴀᴄᴄʜᴀ ʜᴀɪ ᴛᴜ ꜱᴀᴀʟᴇ 🤡💀",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴛ 𝐌ᴇ 𝐌ᴇʀᴀ 𝐉ᴏᴏᴛᴀ 👞🖕🏻",
+    "𝐙ᴇɴɪ𝐓 𝐃ᴀᴅʏ ᴋᴀ 𝐆ᴜʟᴀᴀᴍ ʜᴀɪ ᴛᴜ 🥀😤",
+    "ᴊɪꜱ ᴅɪɴ ᴛᴜ ᴘᴀɪᴅᴀ ʜᴜᴀ 𝐓ᴇʀɪ 𝐌ᴀᴀ ɴᴇ ꜱᴏᴄʜᴀ ᴛʜᴀ ᴋᴀꜱʜ ᴀʙᴏʀᴛ ᴋᴀʀ ᴅᴇᴛɪ 💀🥀",
+    "𝐀ᴘɴɪ 𝐀ᴜᴋᴀᴛ ᴅᴇᴋʜ ᴋᴜᴛᴛᴇ 🐕😂",
+    "𝐆ᴀʟɪ ᴋᴀ 𝐊ᴜᴛᴛᴀ ʜᴀɪ ᴛᴜ 🐕🗑️",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ɴᴇ ᴍᴜᴊʜᴇ ᴅᴇᴋʜ ᴋᴇ ꜱᴏᴄʜᴀ ᴋᴀꜱʜ ʏᴇ ᴍᴇʀᴀ ʙᴇᴛᴀ ʜᴏᴛᴀ 🫦😏",
+    "𝐂ʜᴜᴘ ᴋᴀʀ 𝐌ᴀᴅᴀʀᴄʜᴏᴅ ᴛᴇʀɪ ᴀᴜᴋᴀᴛ ɴᴀʜɪ ᴍᴇʀᴇ ꜱᴀᴀᴍɴᴇ ʙᴏʟɴᴇ ᴋɪ 🤐💀",
+    "𝐓ᴇʀɪ 𝐌ᴀᴀ ᴋɪ 𝐂ʜᴜᴅᴀɪ ᴍᴇ ᴊᴀʙ ᴍᴀɪ ᴛʜᴀ ᴛᴏ ᴛᴜ ᴘᴀɪᴅᴀ ʜᴜᴀ 💀😂",
+    "𝐁ʜᴀɢ ʏᴀʜᴀɴ ꜱᴇ ᴋᴜᴛᴛᴇ ᴋᴇ ᴘɪʟʟᴇ 🐕💨",
+    "𝐓ᴇʀɪ 𝐁ᴇʜᴇɴ ᴋɪ ꜱᴀᴅɪ 𝐌ᴇ ᴍᴇʀᴀ ʟᴜɴᴅ 💍😈",
+    "𝐌ᴀᴅᴀʀᴄʜᴏᴅ ᴀᴘɴɪ 𝐌ᴀᴀ ᴍᴀᴛ ᴄʜᴜᴅᴀ 🖕🏻👹",
+    "𝐁ʜᴇɴᴄʜᴏᴅ 𝐓ᴇʀɪ 𝐊ʜᴀɴᴅᴀɴ ᴋɪ 𝐁𝐊𝐂 💀🖕🏻",
+    "𝐁𝐊𝐂 🦴🐕",
+]
+
+# --- FIXED DELAYS (no adaptive increase) ---
+NC_DELAY = 00000.1          # safe for name changes
+SPAM_DELAY = 00000.1        # FASTEST: 00000.1s per token (10 tokens = 100 msg/s)
+
+# --- SUDO USERS ---
+def load_sudo():
+    if os.path.exists(SUDO_FILE):
+        try:
+            with open(SUDO_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_sudo(users):
+    with open(SUDO_FILE, "w") as f:
+        json.dump(users, f)
+
+SUDO_USERS = load_sudo()
+
+# --- HELPERS ---
+def send_msg(c_id, text, reply_to=None, token=None):
+    if not token:
+        return None
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    payload = {"content": text}
+    if reply_to:
+        payload["message_reference"] = {"channel_id": c_id, "message_id": reply_to}
+    try:
+        r = requests.post(f"https://discord.com/api/v9/channels/{c_id}/messages",
+                         headers=headers, json=payload)
+        if r.status_code == 429:
+            retry_after = r.json().get("retry_after", 1.0)
+            # Sleep exactly the required time, then return None (caller will sleep the normal delay)
+            time.sleep(retry_after)
+            return None  # Indicate rate limit; we already waited
+        return r
+    except Exception as e:
+        print(f"send_msg error: {e}")
+        return None
+
+def change_gc_name(g_id, name, token=None):
+    if not token:
+        return None
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    try:
+        r = requests.patch(f"https://discord.com/api/v9/channels/{g_id}",
+                           headers=headers, json={"name": name})
+        if r.status_code == 429:
+            retry_after = r.json().get("retry_after", 1.0)
+            time.sleep(retry_after)
+        return r
+    except Exception as e:
+        print(f"change_gc_name error: {e}")
+        return None
+
+def add_reaction(c_id, m_id, emoji, token=None):
+    if not token:
+        return
+    encoded_emoji = requests.utils.quote(emoji)
+    url = f"https://discord.com/api/v9/channels/{c_id}/messages/{m_id}/reactions/{encoded_emoji}/@me"
+    try:
+        r = requests.put(url, headers={"Authorization": token})
+        if r.status_code == 429:
+            retry_after = r.json().get("retry_after", 1.0)
+            time.sleep(retry_after)
+    except:
+        pass
+
+def verify_owner_id(token):
+    try:
+        r = requests.get("https://discord.com/api/v9/users/@me",
+                         headers={"Authorization": token}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get('id')
+    except:
+        pass
+    return None
+
+def get_user_info(user_id, token):
+    try:
+        r = requests.get(f"https://discord.com/api/v9/users/{user_id}",
+                         headers={"Authorization": token}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get('username')
+    except:
+        pass
+    return None
+
+def extract_user_id_from_mention(mention):
+    if mention.startswith('<@') and mention.endswith('>'):
+        mention = mention[2:-1]
+        if mention.startswith('!'):
+            mention = mention[1:]
+    else:
+        if mention.startswith('@'):
+            mention = mention[1:]
+    match = re.search(r'\d+', mention)
+    if match:
+        return match.group()
+    return None
+
+# --- NC WORKER ---
+def nc_worker(g_id, target_mention, token=None):
+    key = f"{g_id}_{token[:10] if token else ''}"
+    while ACTIVE_NC_CHANNELS.get(key, False):
+        try:
+            base_line = random.choice(NC_LIST)
+            if base_line.startswith("𝐇𝐀𝐓𝐄𝐑𝐒  "):
+                new_text = f"{target_mention} " + base_line[len("𝐇𝐀𝐓𝐄𝐑𝐒  "):]
+            elif base_line.startswith("𝐇𝐀𝐓𝐄𝐑𝐒 "):
+                new_text = f"{target_mention} " + base_line[len("𝐇𝐀𝐓𝐄𝐑𝐒 "):]
+            else:
+                new_text = f"{target_mention} {base_line}"
+            if len(new_text) > 100:
+                new_text = new_text[:100]
+            response = change_gc_name(g_id, new_text, token)
+            time.sleep(NC_DELAY)
+        except Exception as e:
+            print(f"NC error: {e}")
+            time.sleep(1)
+
+# --- SPAM WORKER (per token, fixed delay, rate limit sleep) ---
+def spam_worker_per_token(c_id, target_mention, token, stop_event):
+    while not stop_event.is_set():
+        msg_template = random.choice(SPAM_MESSAGES)
+        msg = msg_template.replace("##𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞", target_mention)
+        msg = msg.replace("𝗗ʀᴀ𝗩ɪ𝗢ɴ#𝗩ɪ𝗗ʜ𝗔ʏᴀ𝗞", target_mention)
+        response = send_msg(c_id, msg, token=token)
+        # If rate limited, we already slept inside send_msg; just continue the normal delay.
+        # Sleep SPAM_DELAY (0.1s) but break it into small chunks to stop quickly.
+        for _ in range(int(SPAM_DELAY * 10)):
+            if stop_event.is_set():
+                return
+            time.sleep(0.1)
+
+# --- BOT CLIENT ---
+class DiscordSelfBot:
+    def __init__(self, token, bot_index):
+        self.token = token
+        self.bot_index = bot_index
+        self.ws = None
+        self.running = True
+        self.user_id = None
+
+    def on_message(self, ws, message):
+        global ACTIVE_NC_CHANNELS, SPAM_STOP_EVENTS
+        global AUTOREPLY_TARGETS, AUTOREACT_EMOJIS, START_TIME, SUDO_USERS
+        try:
+            data = json.loads(message)
+        except:
+            return
+
+        if data.get("op") == 10:
+            heartbeat_interval = data["d"]["heartbeat_interval"] / 1000
+            def heartbeat():
+                while self.running:
+                    time.sleep(heartbeat_interval)
+                    try:
+                        ws.send(json.dumps({"op": 1, "d": None}))
+                    except:
+                        break
+            threading.Thread(target=heartbeat, daemon=True).start()
+            ws.send(json.dumps({
+                "op": 2,
+                "d": {
+                    "token": self.token,
+                    "properties": {"$os": "windows", "$browser": "chrome", "$device": "pc"}
+                }
+            }))
+            r = requests.get("https://discord.com/api/v9/users/@me", headers={"Authorization": self.token})
+            if r.status_code == 200:
+                self.user_id = r.json().get('id')
+            print(f"\033[92m[✓] Bot {self.bot_index + 1} Connected (Token: ...{self.token[-8:]})\033[0m")
+
+        if data.get("t") == "MESSAGE_CREATE":
+            msg = data["d"]
+            auth_id = msg["author"]["id"]
+            content = msg["content"].strip()
+            c_id = msg["channel_id"]
+            m_id = msg["id"]
+            key_suffix = f"{c_id}_{self.token[:10]}"
+
+            # --- AUTOREPLY ---
+            if c_id in AUTOREPLY_TARGETS:
+                if auth_id in AUTOREPLY_TARGETS[c_id]:
+                    if self.user_id and auth_id != self.user_id:
+                        reply_text = random.choice(REPLY_TEXTS)
+                        send_msg(c_id, reply_text, reply_to=m_id, token=self.token)
+
+            # --- AUTOREACT ---
+            if c_id in AUTOREACT_EMOJIS:
+                emoji = AUTOREACT_EMOJIS[c_id]
+                if self.user_id and auth_id != self.user_id:
+                    threading.Thread(target=add_reaction, args=(c_id, m_id, emoji, self.token), daemon=True).start()
+
+            # --- COMMAND HANDLING ---
+            if auth_id != OWNER_ID and auth_id not in SUDO_USERS:
+                return
+
+            if not content.startswith(PREFIX):
+                return
+
+            cmd_part = content[len(PREFIX):].strip()
+            cmd_lower = cmd_part.lower()
+
+            # ---------- !help ----------
+            if cmd_lower == "help":
+                help_msg = (
+                    "```\n"
+                    "    ╔═══════════════════════════════════════╗\n"
+                    "    ║   𝐙ᴇɴɪ𝐓 𝐊ᴀ 𝐁ᴇᴛ𝐀            ║\n"
+                    "    ║   ⚡ Fuck your haters ⚡        ║\n"
+                    "    ╚═══════════════════════════════════════╝\n\n"
+                    "  🛠️  COMMANDS:\n"
+                    "  ───────────────────────────\n"
+                    "  !nc @user          → Name change spam\n"
+                    "  !stopnc            → Stop name spam\n"
+                    "  !spam @user        → Start multi‑token spam (all tokens, 0.1s delay each)\n"
+                    "  !stopspam          → Stop all spam threads\n"
+                    "  !autoreply @user   → Add autoreply targets\n"
+                    "  !removeautoreply @user → Remove target\n"
+                    "  !stopautoreply     → Clear all autoreply\n"
+                    "  !autoreact <emoji> → Auto‑react with emoji\n"
+                    "  !stopautoreact     → Stop auto‑react\n"
+                    "  !ping              → Check latency\n"
+                    "  !status            → Show bot status & delays\n"
+                    "  !showusers         → List all access users\n"
+                    "  !access @user      → Grant access (owner only)\n"
+                    "  !removeaccess @user → Revoke access\n"
+                    "  ───────────────────────────\n"
+                    "  🏷️  Prefix: `$`  |  🔐 Owner: {OWNER_ID}\n"
+                    "  💀  Use responsibly – Zenit is watching.\n"
+                    "```".format(OWNER_ID=OWNER_ID)
+                )
+                send_msg(c_id, help_msg, token=self.token)
+                return
+
+            # ---------- !nc ----------
+            if cmd_lower.startswith("nc "):
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !nc @user", token=self.token)
+                    return
+                mention = parts[1]
+                ACTIVE_NC_CHANNELS[key_suffix] = True
+                threading.Thread(target=nc_worker, args=(c_id, mention, self.token), daemon=True).start()
+                send_msg(c_id, f"✅ NC started for {mention}", token=self.token)
+                return
+
+            # ---------- !stopnc ----------
+            if cmd_lower == "stopnc":
+                ACTIVE_NC_CHANNELS[key_suffix] = False
+                send_msg(c_id, "✅ NC stopped", token=self.token)
+                return
+
+            # ---------- !spam ----------
+            if cmd_lower.startswith("spam "):
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !spam @user", token=self.token)
+                    return
+                mention = parts[1]
+                # Create a stop event for this channel (shared across all token threads)
+                if c_id not in SPAM_STOP_EVENTS:
+                    SPAM_STOP_EVENTS[c_id] = threading.Event()
+                else:
+                    # If already running, clear old event and create a new one
+                    SPAM_STOP_EVENTS[c_id].set()
+                    SPAM_STOP_EVENTS[c_id] = threading.Event()
+                stop_event = SPAM_STOP_EVENTS[c_id]
+
+                # Launch a thread for every valid token
+                for token in TOKENS:
+                    threading.Thread(target=spam_worker_per_token, args=(c_id, mention, token, stop_event), daemon=True).start()
+                send_msg(c_id, f"✅ Spam started for {mention} using {len(TOKENS)} tokens simultaneously (0.1s delay each – fastest)", token=self.token)
+                return
+
+            # ---------- !stopspam ----------
+            if cmd_lower == "stopspam":
+                if c_id in SPAM_STOP_EVENTS:
+                    SPAM_STOP_EVENTS[c_id].set()
+                    del SPAM_STOP_EVENTS[c_id]
+                    send_msg(c_id, "✅ All spam threads stopped for this channel", token=self.token)
+                else:
+                    send_msg(c_id, "ℹ️ No active spam in this channel", token=self.token)
+                return
+
+            # ---------- !autoreply ----------
+            if cmd_lower.startswith("autoreply "):
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !autoreply @user1 @user2 ...", token=self.token)
+                    return
+                user_ids = []
+                for mention in parts[1:]:
+                    uid = extract_user_id_from_mention(mention)
+                    if uid:
+                        user_ids.append(uid)
+                if not user_ids:
+                    send_msg(c_id, "❌ No valid user mentions", token=self.token)
+                    return
+                if c_id not in AUTOREPLY_TARGETS:
+                    AUTOREPLY_TARGETS[c_id] = []
+                for uid in user_ids:
+                    if uid not in AUTOREPLY_TARGETS[c_id]:
+                        AUTOREPLY_TARGETS[c_id].append(uid)
+                send_msg(c_id, f"✅ Autoreply targets added: {len(user_ids)} user(s)", token=self.token)
+                return
+
+            # ---------- !removeautoreply ----------
+            if cmd_lower.startswith("removeautoreply "):
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !removeautoreply @user", token=self.token)
+                    return
+                mention = parts[1]
+                uid = extract_user_id_from_mention(mention)
+                if not uid:
+                    send_msg(c_id, "❌ Invalid mention", token=self.token)
+                    return
+                if c_id in AUTOREPLY_TARGETS and uid in AUTOREPLY_TARGETS[c_id]:
+                    AUTOREPLY_TARGETS[c_id].remove(uid)
+                    if not AUTOREPLY_TARGETS[c_id]:
+                        del AUTOREPLY_TARGETS[c_id]
+                    send_msg(c_id, f"✅ Removed {mention}", token=self.token)
+                else:
+                    send_msg(c_id, f"ℹ️ {mention} not in list", token=self.token)
+                return
+
+            # ---------- !stopautoreply ----------
+            if cmd_lower == "stopautoreply":
+                if c_id in AUTOREPLY_TARGETS:
+                    del AUTOREPLY_TARGETS[c_id]
+                    send_msg(c_id, "✅ Cleared all targets", token=self.token)
+                else:
+                    send_msg(c_id, "ℹ️ No active targets", token=self.token)
+                return
+
+            # ---------- !autoreact ----------
+            if cmd_lower.startswith("autoreact "):
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !autoreact <emoji>", token=self.token)
+                    return
+                emoji = parts[1]
+                AUTOREACT_EMOJIS[c_id] = emoji
+                send_msg(c_id, f"✅ Autoreact set to {emoji}", token=self.token)
+                return
+
+            # ---------- !stopautoreact ----------
+            if cmd_lower == "stopautoreact":
+                if c_id in AUTOREACT_EMOJIS:
+                    del AUTOREACT_EMOJIS[c_id]
+                    send_msg(c_id, "✅ Stopped", token=self.token)
+                else:
+                    send_msg(c_id, "ℹ️ Not active", token=self.token)
+                return
+
+            # ---------- !ping ----------
+            if cmd_lower == "ping":
+                start = time.time()
+                requests.get("https://discord.com/api/v9/users/@me", headers={"Authorization": self.token})
+                latency = round((time.time() - start) * 1000, 2)
+                send_msg(c_id, f"🏓 Pong! {latency}ms", token=self.token)
+                return
+
+            # ---------- !status ----------
+            if cmd_lower == "status":
+                uptime = round(time.time() - START_TIME, 1)
+                status_msg = (
+                    "```\n"
+                    f"📊 ZeNIT STATUS\n"
+                    f"Uptime: {uptime}s\n"
+                    f"NC Active: {'Yes' if ACTIVE_NC_CHANNELS.get(key_suffix) else 'No'}\n"
+                    f"Spam Active: {'Yes' if c_id in SPAM_STOP_EVENTS else 'No'}\n"
+                    f"NC Delay: {NC_DELAY:.2f}s\n"
+                    f"Spam Delay: {SPAM_DELAY:.2f}s (per token)\n"
+                    f"Tokens Online: {len(TOKENS)}\n"
+                    f"Autoreply: {AUTOREPLY_TARGETS.get(c_id, [])}\n"
+                    f"Autoreact: {AUTOREACT_EMOJIS.get(c_id, 'None')}\n"
+                    f"Owner: {OWNER_ID}\n"
+                    f"Access Users: {len(SUDO_USERS)}\n"
+                    "```"
+                )
+                send_msg(c_id, status_msg, token=self.token)
+                return
+
+            # ---------- !showusers ----------
+            if cmd_lower == "showusers":
+                if not SUDO_USERS:
+                    send_msg(c_id, "ℹ️ No access users added yet.", token=self.token)
+                    return
+                user_list = "\n".join([f"<@{uid}>" for uid in SUDO_USERS])
+                send_msg(c_id, f"📋 **Access Users:**\n{user_list}", token=self.token)
+                return
+
+            # ---------- !access (owner only) ----------
+            if cmd_lower.startswith("access "):
+                if auth_id != OWNER_ID:
+                    send_msg(c_id, "❌ Only the owner can grant access.", token=self.token)
+                    return
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !access @user", token=self.token)
+                    return
+                mention = parts[1]
+                user_id = extract_user_id_from_mention(mention)
+                if not user_id:
+                    send_msg(c_id, "❌ Invalid mention", token=self.token)
+                    return
+                if user_id in SUDO_USERS:
+                    send_msg(c_id, "ℹ️ Already has access", token=self.token)
+                else:
+                    SUDO_USERS.append(user_id)
+                    save_sudo(SUDO_USERS)
+                    send_msg(c_id, f"✅ Granted access to {mention}", token=self.token)
+                return
+
+            # ---------- !removeaccess (owner only) ----------
+            if cmd_lower.startswith("removeaccess "):
+                if auth_id != OWNER_ID:
+                    send_msg(c_id, "❌ Only the owner can revoke access.", token=self.token)
+                    return
+                parts = cmd_part.split()
+                if len(parts) < 2:
+                    send_msg(c_id, "❌ Usage: !removeaccess @user", token=self.token)
+                    return
+                mention = parts[1]
+                user_id = extract_user_id_from_mention(mention)
+                if not user_id:
+                    send_msg(c_id, "❌ Invalid mention", token=self.token)
+                    return
+                if user_id in SUDO_USERS:
+                    SUDO_USERS.remove(user_id)
+                    save_sudo(SUDO_USERS)
+                    send_msg(c_id, f"✅ Removed access from {mention}", token=self.token)
+                else:
+                    send_msg(c_id, "ℹ️ User doesn't have access", token=self.token)
+                return
+
+    def run(self):
+        while self.running:
+            try:
+                self.ws = websocket.WebSocketApp("wss://gateway.discord.gg/?v=9&encoding=json",
+                                                  on_message=self.on_message)
+                self.ws.run_forever()
+            except Exception as e:
+                print(f"\033[91m[!] Bot {self.bot_index + 1} error: {e}\033[0m")
+                time.sleep(5)
+
+# --- LAUNCH ALL BOTS ---
+def run_all_bots():
+    global TOKENS, SPAM_STOP_EVENTS
+
+    print("\033[95m" + "=" * 55)
+    print("      ℤ𝕰𝐍𝐈𝐓  𝕄𝕌𝕃𝕋𝕀-𝕋𝕆𝕂𝔼ℕ  𝕊𝕐𝕊𝕋𝔼𝕄")
+    print("=" * 55 + "\033[0m")
+
+    if not TOKENS:
+        print("\033[91m[!] No tokens configured!\033[0m")
+        return
+
+    clean_tokens = [t.strip() for t in TOKENS if t and t.strip() and not t.startswith('.')]
+
+    print(f"\033[93m[!] Owner ID: {OWNER_ID}\033[0m")
+    print(f"\033[93m[!] Total tokens loaded: {len(clean_tokens)}\033[0m")
+    print("\033[93m[!] Verifying tokens...\033[0m")
+
+    valid_tokens = []
+    for i, token in enumerate(clean_tokens):
+        print(f"\033[93m[~] Checking bot {i+1}...\033[0m")
+        user_id = verify_owner_id(token)
+        if user_id:
+            print(f"\033[92m[✓] Bot {i+1} verified (User ID: {user_id})\033[0m")
+            valid_tokens.append(token)
+        else:
+            print(f"\033[91m[✗] Bot {i+1} - INVALID or EXPIRED token!\033[0m")
+
+    if not valid_tokens:
+        print("\033[91m[!] No valid tokens found. Exiting...\033[0m")
+        return
+
+    TOKENS = valid_tokens
+
+    print(f"\n\033[92m[✓] {len(valid_tokens)} valid tokens found!\033[0m")
+    print("\n\033[93m[!] Starting bot instances...\033[0m\n")
+
+    bots = []
+    for i, token in enumerate(valid_tokens):
+        bot = DiscordSelfBot(token, i)
+        thread = threading.Thread(target=bot.run, daemon=True)
+        thread.start()
+        bots.append(bot)
+        time.sleep(2)
+
+    print("\033[92m[✓] All bots are now running!\033[0m")
+    print("\033[93m[!] Commands:\n"
+          "  !nc @user | !stopnc\n"
+          "  !spam @user | !stopspam\n"
+          "  !autoreply @user1 @user2 ... | !removeautoreply @user | !stopautoreply\n"
+          "  !autoreact <emoji> | !stopautoreact\n"
+          "  !ping | !status | !showusers\n"
+          "  !access @user | !removeaccess @user (owner only)\n"
+          "  !help\033[0m")
+    print("\033[93m[!] Press Ctrl+C to stop all bots\033[0m")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n\033[91m[!] Shutting down all bots...\033[0m")
+        for bot in bots:
+            bot.running = False
+        print("\033[92m[✓] All bots stopped.\033[0m")
+
+if __name__ == "__main__":
+    run_all_bots()
